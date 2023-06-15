@@ -1,6 +1,6 @@
 const express = require("express");
 const app = express();
-const port = 8888;
+const port = 8080;
 const { Storage } = require("@google-cloud/storage");
 const Multer = require("multer");
 const UploadCV = Multer().single("pdfFile");
@@ -611,6 +611,11 @@ app.post('/status', (req, res) => {
     }    
 });
 
+const http = require('http').Server(app); 
+const io = require('socket.io')(http); 
+var userList = []; 
+var roomChatList = [];
+
 // API Chat
 
 // Middleware to parse JSON request bodies
@@ -635,21 +640,25 @@ async function getMessageCompany (req, res){
 async function getChat (req, res) {
   res.json({ message: 'Success Created Room Chat' });
   console.log({ message: 'Success Created Room Chat' });
+//   return res.status(200).json({ message: 'Success Created Room Chat' });
 };
 
 // Endpoint for create new chat
 app.post("/api/chat/newchat", async (req, res) => {
-  // Create a new Date object
+    // Create a new Date object
     const currentDate = new Date();
-    const tokenA = req.session.tokenA;
-    const tokenC = req.session.tokenC;
+    console.log(req)
+    const tokenA = req.body.tokenA;
+    const tokenC = req.body.tokenC;
+    console.log(tokenA, tokenC);
     const decodedTokenA = verifyToken(tokenA);
     const decodedTokenC = verifyToken(tokenC);
+    console.log(decodedTokenA, decodedTokenC);
     const ChatUsernameA = decodedTokenA.username;
     const ChatUsernameC = decodedTokenC.username;
     const RoomId =`RoomChat_` + ChatUsernameA + ChatUsernameC;
 
-  // Specify the options for formatting the date
+    // Specify the options for formatting the date
     const options = {
         year: "numeric",
         month: "2-digit",
@@ -660,7 +669,7 @@ app.post("/api/chat/newchat", async (req, res) => {
         timeZone: "Asia/Jakarta", // Set the desired time zone
     };
 
-  // Format the date into the SQL timestamp format
+    // Format the date into the SQL timestamp format
     const timestamp = currentDate.toLocaleString("id-ID", options)
     .replace(/\//g, "-")
     .replace(",", "")
@@ -671,11 +680,12 @@ app.post("/api/chat/newchat", async (req, res) => {
     const query = "INSERT INTO Room_Chat (Id, ChatUsernameA, ChatUsernameC, Created_at) VALUES (?, ?, ?, ?)";
     const values = [RoomId, ChatUsernameA, ChatUsernameC, timestamp];
 
-        connection.query(query, values, async (error, result) => {
+    connection.query(query, values, async (error, result) => {
         if (error) {
             console.error("Error creating chat:", error);
             return res.status(500).json({ error: "Failed to create chat" });
         }
+        roomChatList.push({roomId: RoomId, usernameA: ChatUsernameA, usernameC: ChatUsernameC, tokenA: tokenA, tokenC: tokenC})
         await getChat(req, res);
     });
 });
@@ -684,13 +694,13 @@ app.post("/api/chat/newchat", async (req, res) => {
 app.post("/api/messages/sendfromapplicant", async (req, res) => {
     // Create a new Date object
     const currentDate = new Date();
-    const tokenA = req.session.tokenA;
-    const tokenC = req.session.tokenC;
+    const tokenA = req.body.tokenA;
+    const tokenC = req.body.tokenC;
     const decodedTokenA = verifyToken(tokenA);
     const decodedTokenC = verifyToken(tokenC);
     const ChatUsernameA = decodedTokenA.username;
     const ChatUsernameC = decodedTokenC.username;
-    const {Message} = req.body;
+    const Message = req.body.message;
 
     // Specify the options for formatting the date
     const options = {
@@ -745,13 +755,13 @@ app.post("/api/messages/sendfromapplicant", async (req, res) => {
 app.post("/api/messages/sendfromcompany", async (req, res) => {
     // Create a new Date object
     const currentDate = new Date();
-    const tokenA = req.session.tokenA;
-    const tokenC = req.session.tokenC;
+    const tokenA = req.body.tokenA;
+    const tokenC = req.body.tokenC;
     const decodedTokenA = verifyToken(tokenA);
     const decodedTokenC = verifyToken(tokenC);
     const ChatUsernameA = decodedTokenA.username;
     const ChatUsernameC = decodedTokenC.username;
-    const {Message} = req.body;
+    const Message = req.body.message;
 
     // Specify the options for formatting the date
     const options = {
@@ -802,10 +812,6 @@ app.post("/api/messages/sendfromcompany", async (req, res) => {
     });
 });
 
-const http = require('http').Server(app); // untuk keperluan socket
-const io = require('socket.io')(http); // untuk keperluan socket
-var userList = []; // untuk keperluan socket
-
 io.on('connection', function(socket) {
     console.log('User Connection');
 
@@ -832,8 +838,12 @@ io.on('connection', function(socket) {
         io.emit('chat message', id, msg);
     });
 
-    socket.on('allUser', function(value){
+    socket.on('allUser', function(token){
         io.emit('allUser', userList);
+    });
+
+    socket.on('allRoomChat', function(token) {
+        io.emit('allRoomChat', roomChatList);
     });
 
     socket.on('SingUp', function(username,User){
@@ -854,12 +864,22 @@ io.on('connection', function(socket) {
            }
      });
 
+     socket.on('SingOut', function(username, User){
+        userList = userList.filter((user) => user['token'] != User['token']);
+        io.emit('SingOut', username,false);
+        io.emit('allUser', userList);  
+     });
+
     socket.on('SingIn', function(username, User) {
-        userList.push(User);
+        console.log(userList.length)
+        userList.push(User)
+        console.log(userList);
+        
         console.log(User["username"])
         console.log(username)
         for (let i = 0; i < userList.length; i++) {
             if (userList[i]['username'] == User['username'] && userList[i]['token'] == User['token']) {
+                userList[i]['isOnline'] = User['isOnline'];
                 io.emit('SingIn', username, userList[i]);
                 break;
             }
@@ -882,8 +902,4 @@ io.on('connection', function(socket) {
 http.listen(port, function() {
     console.log('Server started on port ' + port);
 });
-
-// app.listen(port, () => {
-//     console.log(`Server started on port ${port}`);
-// });
 
